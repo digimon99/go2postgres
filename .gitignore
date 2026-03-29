@@ -1,0 +1,38 @@
+# Binaries
+go2postgres.exe
+go2postgres-linux
+go2postgres-linux-new
+go2postgres
+
+# Build artifacts
+*.exe
+*.out
+
+# Environment files
+.env
+
+# Data
+*.db
+data/
+
+# Logs
+*.log
+logs/
+
+# IDE
+.idea/
+.vscode/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Embedded frontend build (except placeholder)
+internal/static/dist/*
+!internal/static/dist/.gitkeep
+
+# Frontend dependencies
+web/node_modules/
+
+# Build metadata
+build_number.txt

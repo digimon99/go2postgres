@@ -1,0 +1,5 @@
+This is a placeholder file.
+The actual frontend build files will be placed here by running:
+  cd web && npm run build
+
+The build output will replace this file with index.html, assets/, etc.
