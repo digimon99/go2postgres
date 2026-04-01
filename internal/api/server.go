@@ -7,22 +7,24 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/digimon99/go2postgres/internal/api/handlers"
 	"github.com/digimon99/go2postgres/internal/api/middleware"
 	"github.com/digimon99/go2postgres/internal/config"
 	"github.com/digimon99/go2postgres/internal/services"
 	"github.com/digimon99/go2postgres/internal/static"
+	"github.com/gin-gonic/gin"
 )
 
 // Server represents the HTTP server.
 type Server struct {
-	cfg     *config.Config
-	svc     *services.Service
-	otpSvc  *services.OTPService
-	handler *handlers.Handler
-	router  *gin.Engine
-	server  *http.Server
+	cfg          *config.Config
+	svc          *services.Service
+	otpSvc       *services.OTPService
+	handler      *handlers.Handler
+	queryHandler *handlers.QueryHandler
+	tableHandler *handlers.TableHandler
+	router       *gin.Engine
+	server       *http.Server
 }
 
 // NewServer creates a new HTTP server.
@@ -33,10 +35,12 @@ func NewServer(cfg *config.Config, svc *services.Service, otpSvc *services.OTPSe
 	}
 
 	s := &Server{
-		cfg:     cfg,
-		svc:     svc,
-		otpSvc:  otpSvc,
-		handler: handlers.NewHandler(svc, otpSvc),
+		cfg:          cfg,
+		svc:          svc,
+		otpSvc:       otpSvc,
+		handler:      handlers.NewHandler(svc, otpSvc),
+		queryHandler: handlers.NewQueryHandler(svc, svc.GetPoolManager()),
+		tableHandler: handlers.NewTableHandler(svc, svc.GetPoolManager()),
 	}
 
 	s.setupRouter()
@@ -77,6 +81,13 @@ func (s *Server) setupRouter() {
 		auth.POST("/otp/verify", s.handler.VerifyOTP)
 	}
 
+	// ---- /query endpoint (API key auth, separate from JWT auth) ----
+	query := v1.Group("/query")
+	query.Use(middleware.APIKeyAuth(s.svc))
+	{
+		query.POST("", s.queryHandler.HandleQuery)
+	}
+
 	// Protected routes
 	protected := v1.Group("")
 	protected.Use(middleware.Auth(s.svc))
@@ -92,10 +103,31 @@ func (s *Server) setupRouter() {
 			instances.GET("/:id", s.handler.GetInstance)
 			instances.DELETE("/:id", s.handler.DeleteInstance)
 			
-			// Password reveal with stricter rate limit
+			// Password reveal with stricter rate limit (renamed from reveal-password to avoid Cloudflare WAF)
 			revealLimiter := middleware.NewRateLimiter(s.cfg.RevealPasswordLimit, time.Hour)
-			instances.POST("/:id/reveal-password", middleware.RateLimit(revealLimiter), s.handler.RevealPassword)
+			instances.POST("/:id/get-db-config", middleware.RateLimit(revealLimiter), s.handler.RevealPassword)
+
+			// API key management routes
+			instances.GET("/:id/keys", s.handler.ListAPIKeys)
+			instances.POST("/:id/keys", s.handler.CreateAPIKey)
+
+			// Table editor routes
+			instances.GET("/:id/tables", s.tableHandler.ListTables)
+			instances.POST("/:id/tables", s.tableHandler.CreateTable)
+			instances.GET("/:id/tables/:table/schema", s.tableHandler.GetTableSchema)
+			instances.PATCH("/:id/tables/:table", s.tableHandler.UpdateTable)
+			instances.DELETE("/:id/tables/:table", s.tableHandler.DropTable)
+			instances.GET("/:id/tables/:table/rows", s.tableHandler.GetTableRows)
+			instances.POST("/:id/tables/:table/rows", s.tableHandler.InsertRow)
+			instances.PATCH("/:id/tables/:table/rows", s.tableHandler.UpdateRow)
+			instances.DELETE("/:id/tables/:table/rows", s.tableHandler.DeleteRow)
+
+			// SQL editor query endpoint (JWT auth for dashboard users)
+			instances.POST("/:id/query", s.queryHandler.HandleDashboardQuery)
 		}
+
+		// API key revocation (by keyId across all instances)
+		protected.DELETE("/keys/:keyId", s.handler.RevokeAPIKey)
 
 		// Admin routes
 		admin := protected.Group("/admin")

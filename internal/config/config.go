@@ -95,7 +95,7 @@ func Load() (*Config, error) {
 
 		// Security
 		JWTSecret:         getEnv("JWT_SECRET", ""),
-		JWTAccessExpiry:   getEnvDuration("JWT_ACCESS_EXPIRY", 15*time.Minute),
+		JWTAccessExpiry:   getEnvDuration("JWT_ACCESS_EXPIRY", 1*time.Hour),
 		JWTRefreshExpiry:  getEnvDuration("JWT_REFRESH_EXPIRY", 7*24*time.Hour),
 		EncryptionKey:     getEnv("ENCRYPTION_KEY", ""),
 		BcryptCost:        getEnvInt("BCRYPT_COST", 12),

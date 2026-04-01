@@ -30,6 +30,14 @@ Write-Host ">>> Version: $Version (Build #$BuildNum)" -ForegroundColor Magenta
 
 # --- 2. Build Frontend ---
 Write-Host ">>> Building Frontend (React)..." -ForegroundColor Cyan
+
+# Clean old dist files first (Vite doesn't empty outDir when outside project root)
+$distPath = "internal\static\dist\assets"
+if (Test-Path $distPath) {
+    Write-Host ">>> Cleaning old frontend assets..."
+    Remove-Item -Path "$distPath\*" -Force -ErrorAction SilentlyContinue
+}
+
 Push-Location -Path "web"
 try {
     # Install dependencies if needed

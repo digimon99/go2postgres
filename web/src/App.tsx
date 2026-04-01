@@ -5,6 +5,8 @@ import SignIn from './pages/SignIn'
 import SignUp from './pages/SignUp'
 import Dashboard from './pages/Dashboard'
 import Admin from './pages/Admin'
+import TableEditorPage from './pages/TableEditorPage'
+import SqlEditorPage from './pages/SqlEditorPage'
 
 function ProtectedRoute({ children, adminOnly = false }: { children: React.ReactNode; adminOnly?: boolean }) {
   const { user, isLoading } = useAuth()
@@ -80,6 +82,22 @@ export default function App() {
           element={
             <ProtectedRoute adminOnly>
               <Admin />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/instances/:instanceId/tables"
+          element={
+            <ProtectedRoute>
+              <TableEditorPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/instances/:instanceId/sql"
+          element={
+            <ProtectedRoute>
+              <SqlEditorPage />
             </ProtectedRoute>
           }
         />

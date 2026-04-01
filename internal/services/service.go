@@ -36,6 +36,7 @@ type Service struct {
 	cfg       *config.Config
 	repo      *database.Repository
 	pgMgr     *postgres.Manager
+	poolMgr   *postgres.PoolManager
 	jwt       *auth.JWTManager
 	encryptor *crypto.Encryptor
 }
@@ -53,6 +54,7 @@ func NewService(cfg *config.Config, repo *database.Repository, pgMgr *postgres.M
 		cfg:       cfg,
 		repo:      repo,
 		pgMgr:     pgMgr,
+		poolMgr:   postgres.NewPoolManager(),
 		jwt:       jwt,
 		encryptor: encryptor,
 	}, nil
@@ -276,6 +278,12 @@ func (s *Service) CreateInstance(ctx context.Context, userID, projectID string, 
 	// Ensure valid PostgreSQL identifiers
 	dbName = sanitizeIdentifier(dbName)
 	username = sanitizeIdentifier(username)
+
+	// Purge any soft-deleted instances with the same database_name
+	// This allows re-creating instances with the same project_id after deletion
+	if err := s.repo.PurgeSoftDeletedByDatabaseName(ctx, dbName); err != nil {
+		logger.WarnContext(ctx, "failed to purge soft-deleted instance", "database", dbName, "error", err)
+	}
 
 	// Generate secure password
 	password, err := crypto.GenerateSecurePassword(24)

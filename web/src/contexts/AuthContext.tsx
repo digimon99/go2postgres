@@ -1,5 +1,5 @@
-import { createContext, useContext, useState, useEffect, ReactNode } from 'react'
-import { api, User } from '../lib/api'
+import { createContext, useContext, useState, useEffect, ReactNode, useCallback } from 'react'
+import { api, User, onSessionExpired } from '../lib/api'
 
 interface AuthContextType {
   user: User | null
@@ -14,35 +14,34 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
   const [isLoading, setIsLoading] = useState(true)
 
+  // Handle session expiry from api.ts - this is called when refresh token is also invalid
+  const handleSessionExpired = useCallback(() => {
+    setUser(null)
+  }, [])
+
   useEffect(() => {
+    // Register session expiry callback
+    onSessionExpired(handleSessionExpired)
+
     const token = localStorage.getItem('access_token')
     if (token) {
       loadUser()
     } else {
       setIsLoading(false)
     }
-  }, [])
+  }, [handleSessionExpired])
 
   async function loadUser() {
     try {
+      // api.ts now handles 401 + automatic refresh internally
       const userData = await api.getProfile()
       setUser(userData)
-    } catch (error) {
-      // Token invalid, try refresh
-      const refreshToken = localStorage.getItem('refresh_token')
-      if (refreshToken) {
-        try {
-          const tokens = await api.refresh(refreshToken)
-          localStorage.setItem('access_token', tokens.access_token)
-          localStorage.setItem('refresh_token', tokens.refresh_token)
-          const userData = await api.getProfile()
-          setUser(userData)
-        } catch {
-          // Refresh failed, clear tokens
-          localStorage.removeItem('access_token')
-          localStorage.removeItem('refresh_token')
-        }
-      }
+    } catch {
+      // If we get here, either there's no valid session or a non-auth error occurred
+      // Clear tokens just in case
+      localStorage.removeItem('access_token')
+      localStorage.removeItem('refresh_token')
+      setUser(null)
     } finally {
       setIsLoading(false)
     }

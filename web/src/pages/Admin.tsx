@@ -84,7 +84,7 @@ export default function Admin() {
       await api.adminUpdateInstance(instanceId, { status: suspend ? 'suspended' : 'active' })
       setInstances((prev) =>
         prev.map((i) =>
-          i.id === instanceId ? { ...i, status: suspend ? 'suspended' : 'active' } : i
+          i.instance_id === instanceId ? { ...i, status: suspend ? 'suspended' : 'active' } : i
         )
       )
     } catch (err) {
@@ -128,7 +128,7 @@ export default function Admin() {
   const filteredInstances = instances
     .filter(
       (i) =>
-        i.db_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        i.database_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
         i.user_email.toLowerCase().includes(searchQuery.toLowerCase())
     )
     .sort((a, b) => {
@@ -478,7 +478,7 @@ export default function Admin() {
                         <tr>
                           <th
                             className="px-6 py-3 text-left text-xs font-semibold text-slate-600 uppercase cursor-pointer hover:bg-slate-100"
-                            onClick={() => toggleSort('db_name')}
+                            onClick={() => toggleSort('database_name')}
                           >
                             <div className="flex items-center space-x-1">
                               <span>Database</span>
@@ -507,14 +507,14 @@ export default function Admin() {
                       </thead>
                       <tbody className="divide-y divide-slate-200">
                         {filteredInstances.map((i) => (
-                          <tr key={i.id} className="hover:bg-slate-50">
+                          <tr key={i.instance_id} className="hover:bg-slate-50">
                             <td className="px-6 py-4">
                               <div className="flex items-center space-x-3">
                                 <div className="w-8 h-8 bg-primary-100 rounded-lg flex items-center justify-center">
                                   <Database className="w-4 h-4 text-primary-600" />
                                 </div>
                                 <div>
-                                  <p className="text-sm font-medium text-slate-900">{i.db_name}</p>
+                                  <p className="text-sm font-medium text-slate-900">{i.database_name}</p>
                                   <p className="text-xs text-slate-500">{i.username}@{i.host}:{i.port}</p>
                                 </div>
                               </div>
@@ -535,7 +535,7 @@ export default function Admin() {
                             </td>
                             <td className="px-6 py-4 text-right">
                               <button
-                                onClick={() => handleSuspendInstance(i.id, i.status !== 'suspended')}
+                                onClick={() => handleSuspendInstance(i.instance_id, i.status !== 'suspended')}
                                 className={`inline-flex items-center space-x-1 px-3 py-1 rounded text-sm font-medium ${
                                   i.status === 'suspended'
                                     ? 'bg-green-100 text-green-700 hover:bg-green-200'

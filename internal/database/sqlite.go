@@ -148,6 +148,25 @@ func (r *Repository) migrate() error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_otp_codes_email ON otp_codes(email)`,
 		`CREATE INDEX IF NOT EXISTS idx_otp_codes_expires ON otp_codes(expires_at)`,
+
+		`CREATE TABLE IF NOT EXISTS api_keys (
+			id TEXT PRIMARY KEY,
+			instance_id TEXT NOT NULL,
+			user_id TEXT NOT NULL,
+			name TEXT NOT NULL,
+			key_hash TEXT UNIQUE NOT NULL,
+			key_preview TEXT NOT NULL,
+			key_type TEXT NOT NULL DEFAULT 'fullaccess',
+			ip_allowlist TEXT NOT NULL DEFAULT '[]',
+			is_active INTEGER NOT NULL DEFAULT 1,
+			last_used_at DATETIME,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			revoked_at DATETIME,
+			FOREIGN KEY (instance_id) REFERENCES instances(id),
+			FOREIGN KEY (user_id) REFERENCES users(id)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_api_keys_instance ON api_keys(instance_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash)`,
 	}
 
 	for _, m := range migrations {
@@ -375,6 +394,17 @@ func (r *Repository) SoftDeleteInstance(ctx context.Context, id string) error {
 	n, _ := result.RowsAffected()
 	if n == 0 {
 		return ErrNotFound
+	}
+	return nil
+}
+
+// PurgeSoftDeletedByDatabaseName permanently removes soft-deleted instances with the given database_name.
+// This allows re-creating instances with the same project_id after deletion.
+func (r *Repository) PurgeSoftDeletedByDatabaseName(ctx context.Context, dbName string) error {
+	query := `DELETE FROM instances WHERE database_name = ? AND deleted_at IS NOT NULL`
+	_, err := r.db.ExecContext(ctx, query, dbName)
+	if err != nil {
+		return fmt.Errorf("purging soft-deleted instance: %w", err)
 	}
 	return nil
 }
@@ -610,6 +640,88 @@ func (r *Repository) ListAllInstances(ctx context.Context) ([]*models.Instance, 
 		instances = append(instances, i)
 	}
 	return instances, nil
+}
+
+// API key operations
+
+// CreateAPIKey inserts a new API key record.
+func (r *Repository) CreateAPIKey(ctx context.Context, k *models.APIKey) error {
+	query := `INSERT INTO api_keys (id, instance_id, user_id, name, key_hash, key_preview, key_type, ip_allowlist, is_active, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	_, err := r.db.ExecContext(ctx, query,
+		k.ID, k.InstanceID, k.UserID, k.Name, k.KeyHash, k.KeyPreview,
+		k.KeyType, k.IPAllowlist, k.IsActive, k.CreatedAt)
+	if err != nil {
+		if isUniqueConstraintError(err) {
+			return ErrDuplicateKey
+		}
+		return fmt.Errorf("inserting api_key: %w", err)
+	}
+	return nil
+}
+
+// GetAPIKeyByHash looks up a key by its SHA-256 hash (used during request auth).
+func (r *Repository) GetAPIKeyByHash(ctx context.Context, hash string) (*models.APIKey, error) {
+	query := `SELECT id, instance_id, user_id, name, key_hash, key_preview, key_type,
+		ip_allowlist, is_active, last_used_at, created_at, revoked_at
+		FROM api_keys WHERE key_hash = ? AND is_active = 1 AND revoked_at IS NULL`
+	k := &models.APIKey{}
+	err := r.db.QueryRowContext(ctx, query, hash).Scan(
+		&k.ID, &k.InstanceID, &k.UserID, &k.Name, &k.KeyHash, &k.KeyPreview, &k.KeyType,
+		&k.IPAllowlist, &k.IsActive, &k.LastUsedAt, &k.CreatedAt, &k.RevokedAt)
+	if err == sql.ErrNoRows {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("querying api_key: %w", err)
+	}
+	return k, nil
+}
+
+// ListAPIKeysByInstance returns all active keys for a given instance.
+func (r *Repository) ListAPIKeysByInstance(ctx context.Context, instanceID string) ([]*models.APIKey, error) {
+	query := `SELECT id, instance_id, user_id, name, key_hash, key_preview, key_type,
+		ip_allowlist, is_active, last_used_at, created_at, revoked_at
+		FROM api_keys WHERE instance_id = ? AND revoked_at IS NULL ORDER BY created_at DESC`
+	rows, err := r.db.QueryContext(ctx, query, instanceID)
+	if err != nil {
+		return nil, fmt.Errorf("listing api_keys: %w", err)
+	}
+	defer rows.Close()
+	var keys []*models.APIKey
+	for rows.Next() {
+		k := &models.APIKey{}
+		if err := rows.Scan(
+			&k.ID, &k.InstanceID, &k.UserID, &k.Name, &k.KeyHash, &k.KeyPreview, &k.KeyType,
+			&k.IPAllowlist, &k.IsActive, &k.LastUsedAt, &k.CreatedAt, &k.RevokedAt); err != nil {
+			return nil, fmt.Errorf("scanning api_key: %w", err)
+		}
+		keys = append(keys, k)
+	}
+	return keys, nil
+}
+
+// RevokeAPIKey marks a key as revoked by its ID, only if it belongs to the given user.
+func (r *Repository) RevokeAPIKey(ctx context.Context, keyID, userID string) error {
+	now := time.Now().UTC()
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE api_keys SET revoked_at = ?, is_active = 0 WHERE id = ? AND user_id = ? AND revoked_at IS NULL`,
+		now, keyID, userID)
+	if err != nil {
+		return fmt.Errorf("revoking api_key: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// TouchAPIKeyLastUsed updates last_used_at for a key asynchronously (best-effort).
+func (r *Repository) TouchAPIKeyLastUsed(ctx context.Context, keyID string) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE api_keys SET last_used_at = ? WHERE id = ?`, time.Now().UTC(), keyID)
+	return err
 }
 
 // Helper functions

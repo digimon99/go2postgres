@@ -13,9 +13,14 @@ import {
   Clock,
   AlertCircle,
   Loader2,
-  RefreshCw
+  RefreshCw,
+  Key,
+  ChevronDown,
+  ChevronUp,
+  Table2,
+  SquareCode
 } from 'lucide-react'
-import { api, ApiException, Instance } from '../lib/api'
+import { api, ApiException, Instance, APIKey } from '../lib/api'
 import { useAuth } from '../contexts/AuthContext'
 
 export default function Dashboard() {
@@ -26,10 +31,24 @@ export default function Dashboard() {
   const [isCreating, setIsCreating] = useState(false)
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [newDbName, setNewDbName] = useState('')
+  const [newProjectId, setNewProjectId] = useState('')
   const [error, setError] = useState('')
   const [visiblePasswords, setVisiblePasswords] = useState<Set<string>>(new Set())
   const [copiedFields, setCopiedFields] = useState<Set<string>>(new Set())
   const [deletingId, setDeletingId] = useState<string | null>(null)
+
+
+  // API Keys state
+  const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set())
+  const [apiKeys, setApiKeys] = useState<Record<string, APIKey[]>>({})
+  const [loadingKeys, setLoadingKeys] = useState<Set<string>>(new Set())
+  const [showKeyModal, setShowKeyModal] = useState<string | null>(null)
+  const [newKeyName, setNewKeyName] = useState('')
+  const [newKeyType, setNewKeyType] = useState<'fullaccess' | 'readonly'>('fullaccess')
+  const [newKeyIps, setNewKeyIps] = useState('')
+  const [createdKey, setCreatedKey] = useState<string | null>(null)
+  const [keyError, setKeyError] = useState('')
+  const [creatingKey, setCreatingKey] = useState(false)
 
   useEffect(() => {
     fetchInstances()
@@ -56,10 +75,11 @@ export default function Dashboard() {
     setIsCreating(true)
 
     try {
-      const instance = await api.createInstance(newDbName)
+      const instance = await api.createInstance(newDbName, newProjectId)
       setInstances([instance, ...instances])
       setShowCreateModal(false)
       setNewDbName('')
+      setNewProjectId('')
     } catch (err) {
       if (err instanceof ApiException) {
         setError(err.message)
@@ -79,7 +99,7 @@ export default function Dashboard() {
     setDeletingId(id)
     try {
       await api.deleteInstance(id)
-      setInstances(instances.filter((i) => i.id !== id))
+      setInstances(instances.filter((i) => i.instance_id !== id))
     } catch (err) {
       if (err instanceof ApiException) {
         alert(err.message)
@@ -89,7 +109,7 @@ export default function Dashboard() {
     }
   }
 
-  async function handleRevealPassword(id: string) {
+  function handleRevealPassword(id: string) {
     if (visiblePasswords.has(id)) {
       setVisiblePasswords((prev) => {
         const next = new Set(prev)
@@ -99,24 +119,28 @@ export default function Dashboard() {
       return
     }
 
-    try {
-      const password = await api.revealPassword(id)
-      setInstances((prev) =>
-        prev.map((i) => (i.id === id ? { ...i, password } : i))
-      )
-      setVisiblePasswords((prev) => new Set(prev).add(id))
-      // Auto-hide after 30 seconds
-      setTimeout(() => {
-        setVisiblePasswords((prev) => {
-          const next = new Set(prev)
-          next.delete(id)
-          return next
-        })
-      }, 30000)
-    } catch (err) {
-      if (err instanceof ApiException) {
-        alert(err.message)
+    // Decode password client-side from base64 (avoids AJAX call that triggers Cloudflare WAF)
+    const instance = instances.find((i) => i.instance_id === id)
+    if (instance?.password_encoded) {
+      try {
+        const password = atob(instance.password_encoded)
+        setInstances((prev) =>
+          prev.map((i) => (i.instance_id === id ? { ...i, password } : i))
+        )
+        setVisiblePasswords((prev) => new Set(prev).add(id))
+        // Auto-hide after 30 seconds
+        setTimeout(() => {
+          setVisiblePasswords((prev) => {
+            const next = new Set(prev)
+            next.delete(id)
+            return next
+          })
+        }, 30000)
+      } catch {
+        alert('Failed to decode password')
       }
+    } else {
+      alert('Password not available')
     }
   }
 
@@ -130,6 +154,82 @@ export default function Dashboard() {
         return next
       })
     }, 2000)
+  }
+
+  // ---- API Key Functions ----
+  async function toggleExpandKeys(instanceId: string) {
+    if (expandedKeys.has(instanceId)) {
+      setExpandedKeys((prev) => {
+        const n = new Set(prev)
+        n.delete(instanceId)
+        return n
+      })
+      return
+    }
+    setExpandedKeys((prev) => new Set(prev).add(instanceId))
+    if (!apiKeys[instanceId]) {
+      setLoadingKeys((prev) => new Set(prev).add(instanceId))
+      try {
+        const keys = await api.listAPIKeys(instanceId)
+        setApiKeys((prev) => ({ ...prev, [instanceId]: keys }))
+      } catch (err) {
+        console.error('Error loading API keys', err)
+      } finally {
+        setLoadingKeys((prev) => {
+          const n = new Set(prev)
+          n.delete(instanceId)
+          return n
+        })
+      }
+    }
+  }
+
+  async function handleCreateKey(e: React.FormEvent) {
+    e.preventDefault()
+    if (!showKeyModal) return
+    setKeyError('')
+    setCreatingKey(true)
+    try {
+      // Parse IPs into JSON array
+      let ipListJson = '[]'
+      if (newKeyIps.trim()) {
+        const ips = newKeyIps.split(',').map((s) => s.trim()).filter(Boolean)
+        ipListJson = JSON.stringify(ips)
+      }
+      const res = await api.createAPIKey(showKeyModal, newKeyName, newKeyType, ipListJson)
+      setCreatedKey(res.key)
+      // Refresh the key list
+      const keys = await api.listAPIKeys(showKeyModal)
+      setApiKeys((prev) => ({ ...prev, [showKeyModal]: keys }))
+    } catch (err) {
+      if (err instanceof ApiException) {
+        setKeyError(err.message)
+      } else {
+        setKeyError('Failed to create API key')
+      }
+    } finally {
+      setCreatingKey(false)
+    }
+  }
+
+  async function handleRevokeKey(keyId: string, instanceId: string) {
+    if (!confirm('Revoke this API key? Any applications using it will stop working.')) return
+    try {
+      await api.revokeAPIKey(keyId)
+      const keys = await api.listAPIKeys(instanceId)
+      setApiKeys((prev) => ({ ...prev, [instanceId]: keys }))
+    } catch (err) {
+      alert('Failed to revoke key')
+    }
+  }
+
+  function closeKeyModal() {
+    setShowKeyModal(null)
+    setNewKeyName('')
+    setNewKeyType('fullaccess')
+    setNewKeyIps('')
+    setCreatedKey(null)
+    setKeyError('')
   }
 
   function getStatusColor(status: string) {
@@ -243,7 +343,7 @@ export default function Dashboard() {
           <div className="grid gap-6">
             {instances.map((instance) => (
               <div
-                key={instance.id}
+                key={instance.instance_id}
                 className="bg-white rounded-xl border border-slate-200 p-6 hover:border-primary-300 transition-colors"
               >
                 <div className="flex items-start justify-between mb-4">
@@ -252,8 +352,10 @@ export default function Dashboard() {
                       <Database className="w-5 h-5 text-primary-600" />
                     </div>
                     <div>
-                      <h3 className="font-semibold text-slate-900">{instance.db_name}</h3>
+                      <h3 className="font-semibold text-slate-900">{instance.database_name}</h3>
                       <div className="flex items-center space-x-2 text-sm text-slate-500">
+                        <span className="text-primary-600 font-medium">{instance.project_id}</span>
+                        <span>•</span>
                         <Clock className="w-3 h-3" />
                         <span>Created {formatDate(instance.created_at)}</span>
                       </div>
@@ -264,11 +366,25 @@ export default function Dashboard() {
                       {instance.status}
                     </span>
                     <button
-                      onClick={() => handleDelete(instance.id)}
-                      disabled={deletingId === instance.id}
+                      onClick={() => navigate(`/instances/${instance.instance_id}/sql`)}
+                      className="p-2 text-slate-400 hover:text-primary-500 hover:bg-primary-50 rounded-lg transition-colors"
+                      title="SQL Editor"
+                    >
+                      <SquareCode className="w-4 h-4" />
+                    </button>
+                    <button
+                      onClick={() => navigate(`/instances/${instance.instance_id}/tables`)}
+                      className="p-2 text-slate-400 hover:text-primary-500 hover:bg-primary-50 rounded-lg transition-colors"
+                      title="Table Editor"
+                    >
+                      <Table2 className="w-4 h-4" />
+                    </button>
+                    <button
+                      onClick={() => handleDelete(instance.instance_id)}
+                      disabled={deletingId === instance.instance_id}
                       className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-50"
                     >
-                      {deletingId === instance.id ? (
+                      {deletingId === instance.instance_id ? (
                         <Loader2 className="w-4 h-4 animate-spin" />
                       ) : (
                         <Trash2 className="w-4 h-4" />
@@ -284,10 +400,10 @@ export default function Dashboard() {
                     <div className="flex items-center space-x-2">
                       <code className="text-sm text-slate-900">{instance.host}</code>
                       <button
-                        onClick={() => copyToClipboard(instance.host, `${instance.id}-host`)}
+                        onClick={() => copyToClipboard(instance.host, `${instance.instance_id}-host`)}
                         className="p-1 text-slate-400 hover:text-slate-600"
                       >
-                        {copiedFields.has(`${instance.id}-host`) ? (
+                        {copiedFields.has(`${instance.instance_id}-host`) ? (
                           <Check className="w-3 h-3 text-green-500" />
                         ) : (
                           <Copy className="w-3 h-3" />
@@ -300,10 +416,10 @@ export default function Dashboard() {
                     <div className="flex items-center space-x-2">
                       <code className="text-sm text-slate-900">{instance.port}</code>
                       <button
-                        onClick={() => copyToClipboard(instance.port.toString(), `${instance.id}-port`)}
+                        onClick={() => copyToClipboard(instance.port.toString(), `${instance.instance_id}-port`)}
                         className="p-1 text-slate-400 hover:text-slate-600"
                       >
-                        {copiedFields.has(`${instance.id}-port`) ? (
+                        {copiedFields.has(`${instance.instance_id}-port`) ? (
                           <Check className="w-3 h-3 text-green-500" />
                         ) : (
                           <Copy className="w-3 h-3" />
@@ -316,10 +432,10 @@ export default function Dashboard() {
                     <div className="flex items-center space-x-2">
                       <code className="text-sm text-slate-900">{instance.username}</code>
                       <button
-                        onClick={() => copyToClipboard(instance.username, `${instance.id}-user`)}
+                        onClick={() => copyToClipboard(instance.username, `${instance.instance_id}-user`)}
                         className="p-1 text-slate-400 hover:text-slate-600"
                       >
-                        {copiedFields.has(`${instance.id}-user`) ? (
+                        {copiedFields.has(`${instance.instance_id}-user`) ? (
                           <Check className="w-3 h-3 text-green-500" />
                         ) : (
                           <Copy className="w-3 h-3" />
@@ -330,27 +446,27 @@ export default function Dashboard() {
                   <div>
                     <label className="block text-xs font-medium text-slate-500 mb-1">Password</label>
                     <div className="flex items-center space-x-2">
-                      {visiblePasswords.has(instance.id) && instance.password ? (
+                      {visiblePasswords.has(instance.instance_id) && instance.password ? (
                         <code className="text-sm text-slate-900">{instance.password}</code>
                       ) : (
                         <span className="text-sm text-slate-400">••••••••</span>
                       )}
                       <button
-                        onClick={() => handleRevealPassword(instance.id)}
+                        onClick={() => handleRevealPassword(instance.instance_id)}
                         className="p-1 text-slate-400 hover:text-slate-600"
                       >
-                        {visiblePasswords.has(instance.id) ? (
+                        {visiblePasswords.has(instance.instance_id) ? (
                           <EyeOff className="w-3 h-3" />
                         ) : (
                           <Eye className="w-3 h-3" />
                         )}
                       </button>
-                      {visiblePasswords.has(instance.id) && instance.password && (
+                      {visiblePasswords.has(instance.instance_id) && instance.password && (
                         <button
-                          onClick={() => copyToClipboard(instance.password!, `${instance.id}-pass`)}
+                          onClick={() => copyToClipboard(instance.password!, `${instance.instance_id}-pass`)}
                           className="p-1 text-slate-400 hover:text-slate-600"
                         >
-                          {copiedFields.has(`${instance.id}-pass`) ? (
+                          {copiedFields.has(`${instance.instance_id}-pass`) ? (
                             <Check className="w-3 h-3 text-green-500" />
                           ) : (
                             <Copy className="w-3 h-3" />
@@ -366,19 +482,19 @@ export default function Dashboard() {
                   <label className="block text-xs font-medium text-slate-500 mb-1">Connection String</label>
                   <div className="flex items-center space-x-2 p-3 bg-slate-900 rounded-lg overflow-x-auto">
                     <code className="text-sm text-green-400 whitespace-nowrap">
-                      postgresql://{instance.username}:{visiblePasswords.has(instance.id) && instance.password ? instance.password : '******'}@{instance.host}:{instance.port}/{instance.db_name}
+                      postgresql://{instance.username}:{visiblePasswords.has(instance.instance_id) && instance.password ? instance.password : '******'}@{instance.host}:{instance.port}/{instance.database_name}
                     </code>
-                    {visiblePasswords.has(instance.id) && instance.password && (
+                    {visiblePasswords.has(instance.instance_id) && instance.password && (
                       <button
                         onClick={() =>
                           copyToClipboard(
-                            `postgresql://${instance.username}:${instance.password}@${instance.host}:${instance.port}/${instance.db_name}`,
-                            `${instance.id}-conn`
+                            `postgresql://${instance.username}:${instance.password}@${instance.host}:${instance.port}/${instance.database_name}`,
+                            `${instance.instance_id}-conn`
                           )
                         }
                         className="p-1 text-slate-400 hover:text-white flex-shrink-0"
                       >
-                        {copiedFields.has(`${instance.id}-conn`) ? (
+                        {copiedFields.has(`${instance.instance_id}-conn`) ? (
                           <Check className="w-4 h-4 text-green-500" />
                         ) : (
                           <Copy className="w-4 h-4" />
@@ -387,13 +503,69 @@ export default function Dashboard() {
                     )}
                   </div>
                 </div>
+
+                {/* API Keys Section */}
+                <div className="mt-4 border-t border-slate-100 pt-4">
+                  <button
+                    onClick={() => toggleExpandKeys(instance.instance_id)}
+                    className="flex items-center space-x-2 text-sm font-medium text-slate-700 hover:text-primary-600"
+                  >
+                    <Key className="w-4 h-4" />
+                    <span>API Keys</span>
+                    {expandedKeys.has(instance.instance_id) ? (
+                      <ChevronUp className="w-4 h-4" />
+                    ) : (
+                      <ChevronDown className="w-4 h-4" />
+                    )}
+                  </button>
+                  {expandedKeys.has(instance.instance_id) && (
+                    <div className="mt-3 space-y-2">
+                      {loadingKeys.has(instance.instance_id) ? (
+                        <div className="flex items-center space-x-2 text-slate-500 text-sm">
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          <span>Loading keys...</span>
+                        </div>
+                      ) : (
+                        <>
+                          {(apiKeys[instance.instance_id] || []).length === 0 && (
+                            <p className="text-sm text-slate-500">No API keys yet</p>
+                          )}
+                          {(apiKeys[instance.instance_id] || []).map((k) => (
+                            <div key={k.key_id} className="flex items-center justify-between p-2 bg-slate-50 rounded text-sm">
+                              <div>
+                                <span className="font-medium text-slate-800">{k.name}</span>
+                                <span className="text-slate-400 ml-2">({k.key_preview})</span>
+                                <span className={`ml-2 px-1.5 py-0.5 rounded text-xs ${k.key_type === 'readonly' ? 'bg-blue-100 text-blue-700' : 'bg-purple-100 text-purple-700'}`}>
+                                  {k.key_type}
+                                </span>
+                              </div>
+                              <button
+                                onClick={() => handleRevokeKey(k.key_id, instance.instance_id)}
+                                className="text-red-500 hover:text-red-700"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </div>
+                          ))}
+                          <button
+                            onClick={() => setShowKeyModal(instance.instance_id)}
+                            className="w-full flex items-center justify-center space-x-1 p-2 border border-dashed border-slate-300 rounded text-sm text-slate-600 hover:border-primary-400 hover:text-primary-600"
+                          >
+                            <Plus className="w-4 h-4" />
+                            <span>Create API Key</span>
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  )}
+                </div>
               </div>
             ))}
           </div>
         )}
       </main>
 
-      {/* Create Modal */}
+      {/* Create Instance Modal */}
       {showCreateModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-xl max-w-md w-full p-6">
@@ -406,6 +578,24 @@ export default function Dashboard() {
             )}
             <form onSubmit={handleCreate}>
               <div className="mb-4">
+                <label htmlFor="projectId" className="block text-sm font-medium text-slate-700 mb-2">
+                  Project ID
+                </label>
+                <input
+                  id="projectId"
+                  type="text"
+                  value={newProjectId}
+                  onChange={(e) => setNewProjectId(e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, ''))}
+                  className="w-full px-4 py-3 border border-slate-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none"
+                  placeholder="my-project"
+                  required
+                  autoFocus
+                />
+                <p className="mt-1 text-xs text-slate-500">
+                  A unique identifier for your project (e.g., my-app, i360)
+                </p>
+              </div>
+              <div className="mb-4">
                 <label htmlFor="dbName" className="block text-sm font-medium text-slate-700 mb-2">
                   Database Name
                 </label>
@@ -417,7 +607,6 @@ export default function Dashboard() {
                   className="w-full px-4 py-3 border border-slate-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none"
                   placeholder="my_database"
                   required
-                  autoFocus
                   pattern="[a-z][a-z0-9_]*"
                   title="Must start with a letter, only lowercase letters, numbers, and underscores"
                 />
@@ -431,6 +620,7 @@ export default function Dashboard() {
                   onClick={() => {
                     setShowCreateModal(false)
                     setNewDbName('')
+                    setNewProjectId('')
                     setError('')
                   }}
                   className="flex-1 py-2 border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 transition-colors"
@@ -439,7 +629,7 @@ export default function Dashboard() {
                 </button>
                 <button
                   type="submit"
-                  disabled={isCreating || !newDbName}
+                  disabled={isCreating || !newDbName || !newProjectId}
                   className="flex-1 py-2 bg-gradient-to-r from-primary-500 to-accent-500 text-white rounded-lg font-medium hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
                 >
                   {isCreating ? (
@@ -450,6 +640,121 @@ export default function Dashboard() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Create API Key Modal */}
+      {showKeyModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl max-w-md w-full p-6">
+            {createdKey ? (
+              // Show the one-time key
+              <div>
+                <h2 className="text-xl font-bold text-slate-900 mb-4">API Key Created</h2>
+                <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg mb-4">
+                  <p className="text-yellow-800 text-sm mb-2 font-medium">
+                    ⚠️ Copy this key now. You won't be able to see it again!
+                  </p>
+                  <div className="flex items-center space-x-2 bg-white border border-yellow-300 p-2 rounded">
+                    <code className="text-sm text-slate-900 flex-1 break-all">{createdKey}</code>
+                    <button
+                      onClick={() => copyToClipboard(createdKey, 'new-api-key')}
+                      className="p-1 text-slate-400 hover:text-slate-600"
+                    >
+                      {copiedFields.has('new-api-key') ? (
+                        <Check className="w-4 h-4 text-green-500" />
+                      ) : (
+                        <Copy className="w-4 h-4" />
+                      )}
+                    </button>
+                  </div>
+                </div>
+                <button
+                  onClick={closeKeyModal}
+                  className="w-full py-2 bg-slate-900 text-white rounded-lg hover:bg-slate-800"
+                >
+                  Done
+                </button>
+              </div>
+            ) : (
+              <form onSubmit={handleCreateKey}>
+                <h2 className="text-xl font-bold text-slate-900 mb-4">Create API Key</h2>
+                {keyError && (
+                  <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
+                    {keyError}
+                  </div>
+                )}
+                <div className="mb-4">
+                  <label className="block text-sm font-medium text-slate-700 mb-2">Key Name</label>
+                  <input
+                    type="text"
+                    value={newKeyName}
+                    onChange={(e) => setNewKeyName(e.target.value)}
+                    className="w-full px-4 py-3 border border-slate-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none"
+                    placeholder="My API Key"
+                    required
+                    autoFocus
+                  />
+                </div>
+                <div className="mb-4">
+                  <label className="block text-sm font-medium text-slate-700 mb-2">Access Type</label>
+                  <div className="flex space-x-4">
+                    <label className="flex items-center space-x-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="keyType"
+                        value="fullaccess"
+                        checked={newKeyType === 'fullaccess'}
+                        onChange={() => setNewKeyType('fullaccess')}
+                        className="text-primary-600"
+                      />
+                      <span className="text-sm text-slate-700">Full Access</span>
+                    </label>
+                    <label className="flex items-center space-x-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="keyType"
+                        value="readonly"
+                        checked={newKeyType === 'readonly'}
+                        onChange={() => setNewKeyType('readonly')}
+                        className="text-primary-600"
+                      />
+                      <span className="text-sm text-slate-700">Read Only</span>
+                    </label>
+                  </div>
+                </div>
+                <div className="mb-4">
+                  <label className="block text-sm font-medium text-slate-700 mb-2">IP Allowlist (optional)</label>
+                  <input
+                    type="text"
+                    value={newKeyIps}
+                    onChange={(e) => setNewKeyIps(e.target.value)}
+                    className="w-full px-4 py-3 border border-slate-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none"
+                    placeholder="1.2.3.4, 10.0.0.0/8"
+                  />
+                  <p className="mt-1 text-xs text-slate-500">
+                    Comma-separated IPs or CIDR ranges. Leave empty to allow all.
+                  </p>
+                </div>
+                <div className="flex space-x-3">
+                  <button
+                    type="button"
+                    onClick={closeKeyModal}
+                    className="flex-1 py-2 border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={creatingKey || !newKeyName}
+                    className="flex-1 py-2 bg-gradient-to-r from-primary-500 to-accent-500 text-white rounded-lg font-medium hover:opacity-90 disabled:opacity-50"
+                  >
+                    {creatingKey ? <Loader2 className="w-5 h-5 animate-spin mx-auto" /> : 'Create Key'}
+                  </button>
+                </div>
+              </form>
+            )}
           </div>
         </div>
       )}

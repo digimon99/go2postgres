@@ -83,6 +83,28 @@ type RefreshToken struct {
 	RevokedAt *time.Time `db:"revoked_at"`
 }
 
+// APIKey represents a database API key for zero-client HTTP query access.
+type APIKey struct {
+	ID          string     `json:"key_id" db:"id"`
+	InstanceID  string     `json:"instance_id" db:"instance_id"`
+	UserID      string     `json:"user_id" db:"user_id"`
+	Name        string     `json:"name" db:"name"`
+	KeyHash     string     `json:"-" db:"key_hash"`
+	KeyPreview  string     `json:"key_preview" db:"key_preview"`
+	KeyType     string     `json:"key_type" db:"key_type"` // "readonly" or "fullaccess"
+	IPAllowlist string     `json:"ip_allowlist" db:"ip_allowlist"` // JSON array of CIDRs, "" = allow all
+	IsActive    bool       `json:"is_active" db:"is_active"`
+	LastUsedAt  *time.Time `json:"last_used_at,omitempty" db:"last_used_at"`
+	CreatedAt   time.Time  `json:"created_at" db:"created_at"`
+	RevokedAt   *time.Time `json:"revoked_at,omitempty" db:"revoked_at"`
+}
+
+// API key types.
+const (
+	APIKeyTypeReadOnly   = "readonly"
+	APIKeyTypeFullAccess = "fullaccess"
+)
+
 // Constants for roles and statuses.
 const (
 	RoleAdmin = "admin"
